@@ -1,0 +1,101 @@
+project_name: spl_datalogger
+package: Bluetooth
+label: SPL Datalogger
+description: >
+  Sound pressure level datalogger for Thunderboard EFR32BG22 (BRD4184B).
+  Samples the on-board PDM microphones, computes A-weighted SPL metrics
+  (LAeq / LAFmax, Fast time weighting) per configurable interval, stores
+  records in NVM3 and exposes them over a custom BLE GATT service.
+category: Custom
+quality: production
+
+component:
+  - id: sl_main
+  - id: app_os_helper
+  - id: bluetooth_stack
+  - id: gatt_configuration
+  - id: gatt_service_device_information_override
+  - id: bluetooth_feature_legacy_advertiser
+  - id: bluetooth_feature_connection_role_peripheral
+  - id: bluetooth_feature_gatt
+  - id: bluetooth_feature_gatt_server
+  - id: bluetooth_feature_sm
+  - id: bluetooth_feature_system
+  - id: app_assert
+  - id: app_log
+  - id: mpu
+  - id: clock_manager
+  - id: device_init
+  - id: board_control
+  - id: sleeptimer
+  - id: nvm3_default
+  - id: emlib_wdog
+  - id: emlib_rmu
+  - id: mic_pdm_driver
+  - id: cmsis_dsp
+  - id: iostream_usart
+    instance: [vcom]
+  - id: iostream_retarget_stdio
+  - id: cli
+    instance: [inst]
+
+source:
+  - path: src/app.c
+  - path: src/spl_dsp.c
+  - path: src/spl_store.c
+  - path: src/spl_config.c
+  - path: src/spl_cli.c
+  - path: src/spl_ble.c
+  - path: src/app_watchdog.c
+  - path: src/app_measurement.c
+  - path: src/mic_pdm.c
+
+include:
+  - path: src
+    file_list:
+      - path: app.h
+      - path: spl_dsp.h
+      - path: spl_store.h
+      - path: spl_config.h
+      - path: spl_cli.h
+      - path: spl_ble.h
+      - path: app_watchdog.h
+      - path: app_measurement.h
+      - path: mic_pdm.h
+
+config_file:
+  - override:
+      component: gatt_configuration
+      file_id: gatt_configuration_file_id
+    path: config/btconf/gatt_configuration.btconf
+    directory: btconf
+
+configuration:
+  - name: SL_STACK_SIZE
+    value: "2752"
+  - name: SL_PSA_KEY_USER_SLOT_COUNT
+    value: "0"
+    condition:
+      - psa_crypto
+  - name: SL_BOARD_ENABLE_VCOM
+    value: "1"
+  - name: SL_BOARD_ENABLE_SENSOR_MICROPHONE
+    value: "1"
+  # PDM clock = fs * DSR = 32 kHz * 64 = 2.048 MHz. The default DSR of 32
+  # lands on 1.024 MHz, the very edge of the SPK0641HT4H-1 standard-mode
+  # range (1.0-3.25 MHz), which proved unreliable on this board.
+  - name: SL_MIC_PDM_DSR
+    value: "64"
+  # 128 KB (16 flash pages) for the measurement ring + config; the default
+  # 40 KB cannot hold SPL_STORE_MAX_RECORDS objects plus repack headroom.
+  - name: NVM3_DEFAULT_NVM_SIZE
+    value: "131072"
+  - name: NVM3_DEFAULT_CACHE_SIZE
+    value: "256"
+
+post_build:
+  - profile: bt_common
+    condition: [device_series_2, bootloader_app_properties]
+
+tag:
+  - hardware:rf:band:2400
