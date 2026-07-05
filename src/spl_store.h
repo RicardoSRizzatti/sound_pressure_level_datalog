@@ -16,6 +16,9 @@
 /// Ring capacity. 2000 records = 11 h of history at one record / 20 s.
 #define SPL_STORE_MAX_RECORDS 2000u
 
+/// Records per NVM3 object (batching keeps boot scan and repack cheap).
+#define SPL_STORE_BATCH 10u
+
 /// One measurement record, 16 bytes packed.
 typedef struct __attribute__((packed)) {
   uint32_t boot_id;     ///< Increments every boot (records survive resets)

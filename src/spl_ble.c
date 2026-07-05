@@ -203,7 +203,11 @@ static void handle_write(sl_bt_evt_gatt_server_user_write_request_t *req)
             break;
           }
           sync_next_seq = unpack_u32(data + 1);
-          if (sync_next_seq < spl_store_oldest_seq()) {
+          if (sync_next_seq < spl_store_oldest_seq()
+              || sync_next_seq > spl_store_next_seq()) {
+            // Pedido fora da janela (ex.: app com estado de uma "vida"
+            // anterior do dispositivo, pós mass-erase): recomeça do mais
+            // antigo; o app deduplica por boot_id+seq.
             sync_next_seq = spl_store_oldest_seq();
           }
           sync_active = true;
