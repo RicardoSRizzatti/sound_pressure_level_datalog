@@ -13,8 +13,13 @@ Estado do projeto, decisões técnicas e resultados de validação.
 | 3 | Aquisição PDM estéreo 32 kHz (LDMA + FIFO) | ✅ validado com mics reais |
 | 4 | DSP: ponderação A + Fast + LAeq/LAFmax (CMSIS-DSP) | ✅ validado (±0,02 dB) |
 | 5 | Datalog NVM3 + config persistida + CLI | ✅ validado na placa |
-| 6 | Serviço BLE GATT customizado | ✅ conexão validada via nRF Connect; sync a validar com o app |
+| 6 | Serviço BLE GATT customizado | ✅ validado ponta a ponta com o app (sync 198+31 registros, ACK, config, time sync) |
 | 7 | Power manager + operação em bateria | ⏳ pendente |
+
+Bugs achados na validação com hardware (corrigidos): loop de watchdog com
+anel NVM3 cheio (→ watchdog em 2 estágios + **lotes de 10 registros por
+objeto NVM3**), DONE do sync perdido com fila TX cheia (→ retry), START
+fora da janela pós mass-erase (→ clamp). Detalhes nos commits.
 
 ## Decisões técnicas (e porquês)
 
