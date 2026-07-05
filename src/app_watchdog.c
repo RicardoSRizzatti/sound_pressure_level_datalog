@@ -42,7 +42,9 @@ void app_watchdog_init(void)
 
 void app_watchdog_arm_normal(void)
 {
-  wdog_start(wdogPeriod_2k);   // ~2 s supervision during normal operation
+  // ~8 s: still catches real lock-ups quickly, but tolerates the multi-second
+  // stalls a single NVM3 write can hit when a large repack becomes due.
+  wdog_start(wdogPeriod_8k);
 }
 
 uint32_t app_watchdog_reset_cause(void)

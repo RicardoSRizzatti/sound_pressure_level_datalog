@@ -12,8 +12,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/// Sample rate the A-weighting coefficients were designed for.
-#define SPL_DSP_SAMPLE_RATE_HZ  32000u
+/// Sample rate the filters were designed for. 48 kHz divides the 38.4 MHz
+/// PDM branch clock exactly (DSR 50, prescaler 16 -> mic clock 2.400 MHz);
+/// 32 kHz with DSR 64 did NOT (integer prescaler made the real rate 33.3 kHz).
+#define SPL_DSP_SAMPLE_RATE_HZ  48000u
 
 /// Default dBFS -> dB SPL calibration offset for the Knowles SPK0641HT4H-1.
 /// Sensitivity: -26 dBFS (AES17, full-scale sine = 0 dBFS RMS) at 94 dB SPL,

@@ -28,8 +28,9 @@
 /// are twice the size, so the depth is halved to keep the BLE heap intact.)
 #define MIC_PDM_QUEUE_BLOCKS 4u
 
-/// Capture both mics; frames are interleaved [L R L R ...].
-#define MIC_PDM_CHANNELS 2u
+/// Mono capture (left mic). Stereo doubled the FIFO RAM and its diagnostic
+/// job (the BRD4184A/B pin mix-up) is done; the BLE heap needs the space.
+#define MIC_PDM_CHANNELS 1u
 
 // Ping-pong buffer: the driver fills one half while the other is copied out.
 static int16_t pingpong[2 * MIC_PDM_BLOCK_FRAMES * MIC_PDM_CHANNELS];
@@ -110,7 +111,11 @@ void mic_pdm_stop(void)
 
 void mic_pdm_process(void)
 {
-  while (q_read != q_write) {
+  // Bounded drain: if the DSP can't keep up with real time, we must still
+  // return to the main loop (watchdog feed, BLE); the FIFO then overflows
+  // and the overrun counter exposes the overload instead of a reset.
+  uint32_t budget = MIC_PDM_QUEUE_BLOCKS;
+  while (q_read != q_write && budget-- > 0) {
     const int16_t *block = queue[q_read];
 
     for (uint32_t ch = 0; ch < MIC_PDM_CHANNELS; ch++) {

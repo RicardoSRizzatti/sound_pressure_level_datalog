@@ -6,6 +6,7 @@
 
 #include "nvm3_default.h"
 #include "spl_dsp.h"
+#include "spl_toct.h"
 
 #define KEY_CONFIG 0x0003u
 
@@ -23,13 +24,15 @@ static spl_config_t config;
 static void apply(void)
 {
   spl_dsp_set_cal_offset((float)config.cal_offset_cdb / 100.0f);
+  spl_toct_set_enabled((config.metrics & SPL_METRIC_SPECTRUM) != 0);
 }
 
 static bool valid(const spl_config_t *cfg)
 {
   return cfg->version == CONFIG_VERSION
          && cfg->metrics != 0
-         && (cfg->metrics & ~(SPL_METRIC_LAEQ | SPL_METRIC_LAFMAX)) == 0
+         && (cfg->metrics
+             & ~(SPL_METRIC_LAEQ | SPL_METRIC_LAFMAX | SPL_METRIC_SPECTRUM)) == 0
          && cfg->interval_s >= SPL_CONFIG_INTERVAL_MIN_S
          && cfg->interval_s <= SPL_CONFIG_INTERVAL_MAX_S;
 }

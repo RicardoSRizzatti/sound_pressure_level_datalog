@@ -69,6 +69,7 @@ void app_process_action(void)
     mic_pdm_process();
     app_measurement_process();
     spl_ble_process();
+    spl_store_maintain();
   }
   app_watchdog_process();
 }

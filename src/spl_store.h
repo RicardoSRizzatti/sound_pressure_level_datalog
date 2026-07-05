@@ -50,9 +50,32 @@ void spl_store_delete_through(uint32_t seq);
 /// Erase every record.
 void spl_store_clear(void);
 
+/// Call from the main loop: performs one increment of NVM3 repacking when
+/// due, so appends never run into a monolithic multi-second repack.
+void spl_store_maintain(void);
+
 /// This boot's id and the watchdog reset counter maintained at boot.
 uint32_t spl_store_boot_id(void);
 uint32_t spl_store_watchdog_reset_count(void);
+
+/// 1/3-octave spectrum companion ring (aligned to record seq numbers).
+/// 68-byte entries, 3 per NVM3 object; smaller than the base ring — spectra
+/// are heavier, so they cover the most recent ~600 intervals only.
+#define SPL_STORE_MAX_SPECTRA 600u
+#define SPL_STORE_SPEC_BATCH  3u
+#define SPL_STORE_SPEC_BANDS  30u
+
+typedef struct __attribute__((packed)) {
+  uint32_t boot_id;
+  uint32_t seq;                              ///< Same seq as the base record
+  int16_t bands_cdb[SPL_STORE_SPEC_BANDS];   ///< LZeq per band, centi-dB
+} spl_spectrum_t;
+
+/// Append the spectrum of the record with sequence number @p seq.
+bool spl_store_append_spectrum(uint32_t seq, const int16_t bands_cdb[SPL_STORE_SPEC_BANDS]);
+
+/// Read the spectrum for @p seq. False if not stored (or overwritten).
+bool spl_store_read_spectrum(uint32_t seq, spl_spectrum_t *out);
 
 /// Boot -> Unix epoch mapping, persisted on BLE time sync (protocolo_ble.md).
 #define SPL_STORE_MAX_BOOT_EPOCHS 8u

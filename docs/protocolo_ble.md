@@ -24,7 +24,7 @@ bonding Just Works (definido na Fase 6).
 
 | Offset | Tipo | Campo |
 |---|---|---|
-| 0 | u8 | `metrics` bitmask: bit0 = LAeq, bit1 = LAFmax |
+| 0 | u8 | `metrics` bitmask: bit0 = LAeq, bit1 = LAFmax, bit2 = espectro 1/3 oitava |
 | 1 | u16 | `interval_s` (5–3600) |
 | 3 | i8 | reservado (0) |
 
@@ -94,6 +94,26 @@ MTU 247 permite 14 por notificação):
 | 8 | u32 | `uptime_s` |
 | 12 | i16 | `laeq_cdb` |
 | 14 | i16 | `lafmax_cdb` |
+
+### Spectra — `b8f00009-...` (notify)
+
+Espectros de terço de oitava (**LZeq por banda**, sem ponderação) dos mesmos
+`seq` dos registros, enviados **depois** de todos os Records e antes do DONE
+(quando o app está inscrito nesta característica). Cada notificação carrega
+`N = len/68` entradas:
+
+| Offset | Tipo | Campo |
+|---|---|---|
+| 0 | u32 | `boot_id` |
+| 4 | u32 | `seq` (mesmo do registro correspondente) |
+| 8 | 30×i16 | `bands_cdb[30]` — LZeq em centi-dB, bandas de 20 Hz a 16 kHz |
+
+Ordem das bandas (Hz): 20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200,
+250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000,
+5000, 6300, 8000, 10000, 12500, 16000. Intervalos gravados sem a métrica de
+espectro simplesmente não têm entrada (o app trata como ausente). O anel de
+espectros no dispositivo é menor que o de registros (~600 intervalos); o ACK
+apaga ambos.
 
 ## Fluxo de sincronização do app
 

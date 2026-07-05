@@ -74,6 +74,10 @@
         <value length="224" type="user" variable_length="true"/>
         <properties notify="true" notify_requirement="mandatory"/>
       </characteristic>
+      <characteristic id="spl_spectra" name="Spectra" uuid="b8f00009-9df1-4c39-9f2c-3e0d94a83f2b">
+        <value length="204" type="user" variable_length="true"/>
+        <properties notify="true" notify_requirement="mandatory"/>
+      </characteristic>
     </service>
   </gatt>
 </project>

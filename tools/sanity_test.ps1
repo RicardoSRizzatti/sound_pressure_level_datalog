@@ -95,9 +95,9 @@ try {
   Assert 'sem overruns de audio' (((Get-Field $st2 'mic_overruns') ?? '0') -eq '0')
 
   # --- 4. watchdog (hang) ---------------------------------------------------------
-  Write-Host '-- comando hang: watchdog deve resetar em ~2 s --'
+  Write-Host '-- comando hang: watchdog deve resetar em ~8 s --'
   $sp.Write("hang`r`n")
-  $reboot = Read-For $sp 8
+  $reboot = Read-For $sp 14
   Assert 'placa reiniciou apos hang' ($reboot -match 'SPL datalogger booting')
   Assert 'causa de reset = watchdog' ($reboot -match 'WATCHDOG RESET')
 

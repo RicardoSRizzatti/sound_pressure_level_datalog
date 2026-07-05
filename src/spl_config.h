@@ -12,8 +12,9 @@
 #include <stdint.h>
 
 /// Metric selection bits.
-#define SPL_METRIC_LAEQ    (1u << 0)
-#define SPL_METRIC_LAFMAX  (1u << 1)
+#define SPL_METRIC_LAEQ      (1u << 0)
+#define SPL_METRIC_LAFMAX    (1u << 1)
+#define SPL_METRIC_SPECTRUM  (1u << 2)   ///< 1/3-octave LZeq per band
 
 #define SPL_CONFIG_INTERVAL_MIN_S 5u
 #define SPL_CONFIG_INTERVAL_MAX_S 3600u

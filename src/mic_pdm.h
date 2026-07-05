@@ -12,8 +12,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/// 10 ms blocks at 32 kHz.
-#define MIC_PDM_BLOCK_FRAMES 320u
+/// 8 ms blocks at 48 kHz.
+#define MIC_PDM_BLOCK_FRAMES 384u
 
 /// Power the microphones, start streaming. Returns false on driver error.
 bool mic_pdm_start(void);

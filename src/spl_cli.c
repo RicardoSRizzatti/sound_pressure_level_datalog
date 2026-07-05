@@ -6,6 +6,8 @@
 
 #include <stdio.h>
 
+#include "em_device.h"
+
 #include "app_measurement.h"
 #include "app_watchdog.h"
 #include "mic_pdm.h"
@@ -14,6 +16,7 @@
 #include "spl_config.h"
 #include "spl_dsp.h"
 #include "spl_store.h"
+#include "spl_toct.h"
 
 static void cmd_status(sl_cli_command_arg_t *arguments)
 {
@@ -33,6 +36,7 @@ static void cmd_status(sl_cli_command_arg_t *arguments)
          (int)spl_dsp_current_laf_db(),
          abs((int)(spl_dsp_current_laf_db() * 10.0f) % 10));
   printf("mic_overruns: %lu\r\n", (unsigned long)mic_pdm_overrun_count());
+  printf("core_clock_hz: %lu\r\n", (unsigned long)SystemCoreClock);
   printf("mic_blocks: %lu  ch0 peak/mean: %d/%ld  ch1 peak/mean: %d/%ld\r\n",
          (unsigned long)mic_pdm_blocks_total(),
          (int)mic_pdm_last_peak(0), (long)mic_pdm_last_mean(0),
@@ -92,6 +96,41 @@ static void cmd_interval(sl_cli_command_arg_t *arguments)
   }
 }
 
+static void cmd_metrics(sl_cli_command_arg_t *arguments)
+{
+  spl_config_t cfg = *spl_config_get();
+  cfg.metrics = (uint8_t)sl_cli_get_argument_uint32(arguments, 0);
+  if (spl_config_set(&cfg)) {
+    printf("metrics: 0x%02x\r\n", cfg.metrics);
+  } else {
+    printf("error (bits: 1=LAeq 2=LAFmax 4=espectro)\r\n");
+  }
+}
+
+static void cmd_spec(sl_cli_command_arg_t *arguments)
+{
+  (void)arguments;
+  int16_t bands[SPL_TOCT_BANDS];
+  if (!spl_toct_enabled()) {
+    printf("espectro desabilitado (metrics bit 0x04)\r\n");
+    return;
+  }
+  if (!spl_toct_last(bands)) {
+    printf("nenhum intervalo fechado ainda\r\n");
+    return;
+  }
+  printf("banda_Hz,LZeq_dB\r\n");
+  for (uint32_t b = 0; b < SPL_TOCT_BANDS; b++) {
+    uint32_t dhz = spl_toct_center_dhz(b);
+    if (dhz % 10 == 0) {
+      printf("%lu,", (unsigned long)(dhz / 10));
+    } else {
+      printf("%lu.%lu,", (unsigned long)(dhz / 10), (unsigned long)(dhz % 10));
+    }
+    printf("%d.%02d\r\n", bands[b] / 100, abs(bands[b] % 100));
+  }
+}
+
 static void cmd_testtone(sl_cli_command_arg_t *arguments)
 {
   uint32_t freq = sl_cli_get_argument_uint32(arguments, 0);
@@ -129,6 +168,12 @@ static const sl_cli_command_info_t cmd_info_cal =
 static const sl_cli_command_info_t cmd_info_interval =
   SL_CLI_COMMAND(cmd_interval, "Set measurement interval", "seconds",
                  { SL_CLI_ARG_UINT32, SL_CLI_ARG_END, });
+static const sl_cli_command_info_t cmd_info_metrics =
+  SL_CLI_COMMAND(cmd_metrics, "Set metric bitmask", "1=LAeq 2=LAFmax 4=espectro",
+                 { SL_CLI_ARG_UINT32, SL_CLI_ARG_END, });
+static const sl_cli_command_info_t cmd_info_spec =
+  SL_CLI_COMMAND(cmd_spec, "Show last interval 1/3-octave spectrum", "",
+                 { SL_CLI_ARG_END, });
 static const sl_cli_command_info_t cmd_info_testtone =
   SL_CLI_COMMAND(cmd_testtone, "Inject a synthetic sine instead of mic input",
                  "freq Hz (0=off)" SL_CLI_UNIT_SEPARATOR "amplitude centi-dBFS",
@@ -143,6 +188,8 @@ static sl_cli_command_entry_t command_table[] = {
   { "clear", &cmd_info_clear, false },
   { "cal", &cmd_info_cal, false },
   { "interval", &cmd_info_interval, false },
+  { "metrics", &cmd_info_metrics, false },
+  { "spec", &cmd_info_spec, false },
   { "testtone", &cmd_info_testtone, false },
   { "hang", &cmd_info_hang, false },
   { NULL, NULL, false },

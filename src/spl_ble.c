@@ -28,16 +28,25 @@
 // Cap of records per notification; the actual count also honours the MTU.
 #define MAX_RECORDS_PER_NOTIFY 14u
 
+// Spectrum wire entry: boot_id u32 + seq u32 + 30 x i16 = 68 bytes.
+#define SPECTRUM_WIRE_SIZE (8u + 2u * SPL_STORE_SPEC_BANDS)
+#define MAX_SPECTRA_PER_NOTIFY 3u
+
 static uint8_t active_connection = SL_BT_INVALID_CONNECTION_HANDLE;
 static uint16_t att_mtu = 23;
 
 static bool status_notif_enabled;
 static bool records_notif_enabled;
+static bool spectra_notif_enabled;
 
-// Sync session state.
+// Sync session state. Records stream first, then (when the app subscribed
+// to Spectra) the spectra of the same range, then DONE.
 static bool sync_active;
 static bool sync_done_pending;   // backlog drained, DONE not yet delivered
 static uint32_t sync_next_seq;   // next record to send
+static uint32_t sync_start_seq;  // first seq of this session
+static bool sync_spec_phase;     // records done, streaming spectra
+static uint32_t sync_spec_seq;   // next spectrum to send
 
 static void pack_u16(uint8_t *p, uint16_t v)
 {
@@ -212,6 +221,8 @@ static void handle_write(sl_bt_evt_gatt_server_user_write_request_t *req)
           }
           sync_active = true;
           sync_done_pending = false;
+          sync_start_seq = sync_next_seq;
+          sync_spec_phase = false;
           (void)send_sync_event(SYNC_EVT_RANGE,
                                 spl_store_oldest_seq(), spl_store_next_seq(), 2);
           app_proceed();
@@ -261,6 +272,7 @@ void spl_ble_on_event(sl_bt_msg_t *evt)
       active_connection = SL_BT_INVALID_CONNECTION_HANDLE;
       status_notif_enabled = false;
       records_notif_enabled = false;
+      spectra_notif_enabled = false;
       sync_active = false;
       sync_done_pending = false;
       break;
@@ -280,6 +292,8 @@ void spl_ble_on_event(sl_bt_msg_t *evt)
           sync_active = false;
           sync_done_pending = false;
         }
+      } else if (st->characteristic == gattdb_spl_spectra) {
+        spectra_notif_enabled = enabled;
       }
       break;
     }
@@ -359,6 +373,58 @@ void spl_ble_process(void)
       return;
     }
     sync_next_seq += n;
+  }
+
+  // Records drained; stream the spectra of the same range if subscribed.
+  if (spectra_notif_enabled) {
+    if (!sync_spec_phase) {
+      sync_spec_phase = true;
+      sync_spec_seq = sync_start_seq;
+    }
+    while (sync_spec_seq < spl_store_next_seq()) {
+      uint8_t payload[MAX_SPECTRA_PER_NOTIFY * SPECTRUM_WIRE_SIZE];
+      uint32_t max_by_mtu = (uint32_t)(att_mtu - 3) / SPECTRUM_WIRE_SIZE;
+      if (max_by_mtu == 0) {
+        max_by_mtu = 1;
+      }
+      if (max_by_mtu > MAX_SPECTRA_PER_NOTIFY) {
+        max_by_mtu = MAX_SPECTRA_PER_NOTIFY;
+      }
+
+      // Pack consecutive existing spectra (intervals without the spectrum
+      // metric enabled simply have no entry and are skipped).
+      uint32_t bundle_start = sync_spec_seq;
+      uint32_t n = 0;
+      spl_spectrum_t sp;
+      while (n < max_by_mtu && sync_spec_seq < spl_store_next_seq()) {
+        if (spl_store_read_spectrum(sync_spec_seq, &sp)) {
+          uint8_t *p = payload + n * SPECTRUM_WIRE_SIZE;
+          pack_u32(p, sp.boot_id);
+          pack_u32(p + 4, sp.seq);
+          for (uint32_t b = 0; b < SPL_STORE_SPEC_BANDS; b++) {
+            pack_u16(p + 8 + 2 * b, (uint16_t)sp.bands_cdb[b]);
+          }
+          n++;
+          sync_spec_seq++;
+        } else if (n == 0) {
+          sync_spec_seq++;   // gap: keep scanning
+        } else {
+          break;             // flush what we have, resume scanning after send
+        }
+      }
+      if (n == 0) {
+        continue;   // reached next_seq while scanning gaps
+      }
+
+      sl_status_t sc = sl_bt_gatt_server_send_notification(
+        active_connection, gattdb_spl_spectra,
+        (uint16_t)(n * SPECTRUM_WIRE_SIZE), payload);
+      if (sc != SL_STATUS_OK) {
+        sync_spec_seq = bundle_start;   // rebuild this bundle on the next pass
+        app_proceed();
+        return;
+      }
+    }
   }
 
   // Backlog drained: deliver DONE (retried above if the queue is full).

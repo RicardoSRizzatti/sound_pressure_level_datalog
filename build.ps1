@@ -43,6 +43,12 @@ if ($Clean -and (Test-Path $GenDir)) {
 # --- 1. Generate --------------------------------------------------------------
 if ($Generate -or -not (Test-Path $CMakeDir)) {
   Write-Host "== slc generate ==" -ForegroundColor Cyan
+  # slc preserva configs ja existentes no destino: forca o btconf do repo
+  # (fonte da verdade do GATT) antes de gerar, senao gatt_db.h fica velho.
+  $btconfDst = Join-Path $GenDir 'config\btconf\gatt_configuration.btconf'
+  if (Test-Path $btconfDst) {
+    Copy-Item (Join-Path $RepoRoot 'config\btconf\gatt_configuration.btconf') $btconfDst -Force
+  }
   slc generate (Join-Path $RepoRoot 'app.slcp') -d $GenDir --with $Board -o cmake
   if ($LASTEXITCODE -ne 0) { throw "slc generate failed" }
 }

@@ -20,15 +20,19 @@
 #include "app_watchdog.h"
 #include "nvm3_default.h"
 
-// NVM3 key map. Batch objects occupy [KEY_RECORD_BASE, KEY_RECORD_BASE + MAX_BATCHES).
+// NVM3 key map. Batch objects occupy [KEY_RECORD_BASE, KEY_RECORD_BASE + MAX_BATCHES);
+// spectrum batches occupy [KEY_SPEC_BASE, KEY_SPEC_BASE + MAX_SPEC_BATCHES).
 #define KEY_BOOT_ID        0x0001u
 #define KEY_WDOG_COUNT     0x0002u
 // 0x0003 is the device configuration (spl_config.c).
 #define KEY_BOOT_EPOCHS    0x0004u
 #define KEY_RECORD_BASE    0x1000u
+#define KEY_SPEC_BASE      0x2000u
 
 #define BATCH              SPL_STORE_BATCH
 #define MAX_BATCHES        (SPL_STORE_MAX_RECORDS / SPL_STORE_BATCH)
+#define SPEC_BATCH         SPL_STORE_SPEC_BATCH
+#define MAX_SPEC_BATCHES   (SPL_STORE_MAX_SPECTRA / SPL_STORE_SPEC_BATCH)
 
 static uint32_t boot_id;
 static uint32_t wdog_reset_count;
@@ -43,6 +47,15 @@ static spl_record_t cur_batch[BATCH];
 static spl_record_t read_cache[BATCH];
 static uint32_t read_cache_batch = UINT32_MAX;
 static uint32_t read_cache_count;
+
+// Spectrum companion ring state (implementation further down). Entries are
+// self-describing by seq; a batch may be sparse when the spectrum metric
+// toggles between intervals.
+static spl_spectrum_t cur_spec[SPEC_BATCH];
+static uint32_t cur_spec_count;
+static uint32_t cur_spec_batch = UINT32_MAX;
+static nvm3_ObjectKey_t spec_key(uint32_t spec_batch);
+static void spec_delete_through(uint32_t seq);
 
 static nvm3_ObjectKey_t batch_key(uint32_t batch)
 {
@@ -225,6 +238,8 @@ void spl_store_delete_through(uint32_t seq)
     }
   }
 
+  spec_delete_through(seq);
+
   oldest_seq = seq + 1;
   empty = (oldest_seq == next_seq);
 }
@@ -233,11 +248,20 @@ void spl_store_clear(void)
 {
   if (!empty) {
     spl_store_delete_through(next_seq - 1);
-    // Also drop the partial batch object, if any.
+    // Also drop the partial batch objects, if any.
     (void)nvm3_deleteObject(nvm3_defaultHandle, batch_key(next_seq / BATCH));
+    (void)nvm3_deleteObject(nvm3_defaultHandle, spec_key(next_seq / SPEC_BATCH));
     read_cache_batch = UINT32_MAX;
+    cur_spec_batch = UINT32_MAX;
     oldest_seq = next_seq;
     empty = true;
+  }
+}
+
+void spl_store_maintain(void)
+{
+  if (nvm3_repackNeeded(nvm3_defaultHandle)) {
+    (void)nvm3_repack(nvm3_defaultHandle);   // one staged increment
   }
 }
 
@@ -249,6 +273,97 @@ uint32_t spl_store_boot_id(void)
 uint32_t spl_store_watchdog_reset_count(void)
 {
   return wdog_reset_count;
+}
+
+// ---- Spectrum companion ring -------------------------------------------------
+
+static nvm3_ObjectKey_t spec_key(uint32_t spec_batch)
+{
+  return KEY_SPEC_BASE + (spec_batch % MAX_SPEC_BATCHES);
+}
+
+/// Read the spectrum object at @p key into @p out (up to SPEC_BATCH entries).
+static uint32_t read_spec_object(nvm3_ObjectKey_t key, spl_spectrum_t *out)
+{
+  uint32_t type;
+  size_t len;
+  if (nvm3_getObjectInfo(nvm3_defaultHandle, key, &type, &len) != SL_STATUS_OK
+      || type != NVM3_OBJECTTYPE_DATA
+      || len == 0 || len > sizeof(spl_spectrum_t) * SPEC_BATCH
+      || (len % sizeof(spl_spectrum_t)) != 0) {
+    return 0;
+  }
+  if (nvm3_readData(nvm3_defaultHandle, key, out, len) != SL_STATUS_OK) {
+    return 0;
+  }
+  return (uint32_t)(len / sizeof(spl_spectrum_t));
+}
+
+bool spl_store_append_spectrum(uint32_t seq, const int16_t bands_cdb[SPL_STORE_SPEC_BANDS])
+{
+  uint32_t batch = seq / SPEC_BATCH;
+
+  if (cur_spec_batch != batch) {
+    // Entering a new batch slot: keep entries already stored for THIS batch
+    // (reboot recovery); anything older in the slot gets overwritten.
+    uint32_t n = read_spec_object(spec_key(batch), cur_spec);
+    cur_spec_count = 0;
+    for (uint32_t i = 0; i < n; i++) {
+      if (cur_spec[i].seq / SPEC_BATCH == batch && cur_spec[i].seq < seq) {
+        cur_spec[cur_spec_count++] = cur_spec[i];
+      }
+    }
+    cur_spec_batch = batch;
+  }
+
+  if (cur_spec_count >= SPEC_BATCH) {
+    return false;   // should not happen (3 seqs per batch)
+  }
+  cur_spec[cur_spec_count].boot_id = boot_id;
+  cur_spec[cur_spec_count].seq = seq;
+  memcpy(cur_spec[cur_spec_count].bands_cdb, bands_cdb,
+         sizeof(cur_spec[0].bands_cdb));
+  cur_spec_count++;
+
+  return nvm3_writeData(nvm3_defaultHandle, spec_key(batch),
+                        cur_spec, cur_spec_count * sizeof(spl_spectrum_t))
+         == SL_STATUS_OK;
+}
+
+bool spl_store_read_spectrum(uint32_t seq, spl_spectrum_t *out)
+{
+  spl_spectrum_t buf[SPEC_BATCH];
+  uint32_t n = read_spec_object(spec_key(seq / SPEC_BATCH), buf);
+  for (uint32_t i = 0; i < n; i++) {
+    if (buf[i].seq == seq) {
+      *out = buf[i];
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Delete spectrum batches fully covered by an ACK up to @p seq.
+static void spec_delete_through(uint32_t seq)
+{
+  // Walk the batch indices whose last seq (b*SPEC_BATCH + SPEC_BATCH - 1)
+  // is covered by the ACK, bounded by the ring span.
+  uint32_t last_batch = seq / SPEC_BATCH;
+  uint32_t first_batch = (last_batch >= MAX_SPEC_BATCHES)
+                         ? last_batch - MAX_SPEC_BATCHES + 1 : 0;
+  uint32_t done = 0;
+  for (uint32_t b = first_batch; b <= last_batch; b++) {
+    if ((b * SPEC_BATCH + SPEC_BATCH - 1) > seq) {
+      break;   // partially covered batch stays (app dedups on re-sync)
+    }
+    if (((done++) & 0x1F) == 0) {
+      app_watchdog_feed_now();
+    }
+    (void)nvm3_deleteObject(nvm3_defaultHandle, spec_key(b));
+    if (cur_spec_batch == b) {
+      cur_spec_batch = UINT32_MAX;
+    }
+  }
 }
 
 static uint32_t load_boot_epochs(spl_boot_epoch_t table[SPL_STORE_MAX_BOOT_EPOCHS])

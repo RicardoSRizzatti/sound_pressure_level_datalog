@@ -11,6 +11,7 @@
 #include "spl_config.h"
 #include "spl_dsp.h"
 #include "spl_store.h"
+#include "spl_toct.h"
 
 static sl_sleeptimer_timer_handle_t interval_timer;
 static volatile bool interval_elapsed;
@@ -65,10 +66,20 @@ void app_measurement_process(void)
                        ? (int16_t)(result.lafmax_db * 100.0f) : INT16_MIN;
 
   if (spl_store_append(laeq_cdb, lafmax_cdb, app_measurement_uptime_s())) {
+    uint32_t seq = spl_store_next_seq() - 1;
     app_log_info("rec %lu: LAeq %d.%02d dB(A)  LAFmax %d.%02d dB(A)" APP_LOG_NL,
-                 (unsigned long)(spl_store_next_seq() - 1),
+                 (unsigned long)seq,
                  laeq_cdb / 100, abs(laeq_cdb % 100),
                  lafmax_cdb / 100, abs(lafmax_cdb % 100));
+
+    if (cfg->metrics & SPL_METRIC_SPECTRUM) {
+      int16_t bands[SPL_TOCT_BANDS];
+      if (spl_toct_close_interval(bands)
+          && !spl_store_append_spectrum(seq, bands)) {
+        app_log_error("NVM3 spectrum append failed" APP_LOG_NL);
+      }
+    }
+
     spl_ble_notify_new_record();
   } else {
     app_log_error("NVM3 append failed" APP_LOG_NL);
