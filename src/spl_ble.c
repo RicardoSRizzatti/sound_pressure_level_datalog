@@ -36,6 +36,7 @@ static bool records_notif_enabled;
 
 // Sync session state.
 static bool sync_active;
+static bool sync_done_pending;   // backlog drained, DONE not yet delivered
 static uint32_t sync_next_seq;   // next record to send
 
 static void pack_u16(uint8_t *p, uint16_t v)
@@ -82,7 +83,7 @@ static void pack_record(uint8_t *p, const spl_record_t *rec)
   pack_u16(p + 14, (uint16_t)rec->lafmax_cdb);
 }
 
-static void send_sync_event(uint8_t evt, uint32_t a, uint32_t b, uint8_t n_words)
+static sl_status_t send_sync_event(uint8_t evt, uint32_t a, uint32_t b, uint8_t n_words)
 {
   uint8_t buf[9];
   buf[0] = evt;
@@ -90,9 +91,9 @@ static void send_sync_event(uint8_t evt, uint32_t a, uint32_t b, uint8_t n_words
   if (n_words == 2) {
     pack_u32(buf + 5, b);
   }
-  (void)sl_bt_gatt_server_send_indication(active_connection,
-                                          gattdb_spl_sync_ctrl,
-                                          (uint8_t)(1 + 4 * n_words), buf);
+  return sl_bt_gatt_server_send_indication(active_connection,
+                                           gattdb_spl_sync_ctrl,
+                                           (uint8_t)(1 + 4 * n_words), buf);
 }
 
 // ---- User read/write handlers ----------------------------------------------
@@ -206,8 +207,9 @@ static void handle_write(sl_bt_evt_gatt_server_user_write_request_t *req)
             sync_next_seq = spl_store_oldest_seq();
           }
           sync_active = true;
-          send_sync_event(SYNC_EVT_RANGE,
-                          spl_store_oldest_seq(), spl_store_next_seq(), 2);
+          sync_done_pending = false;
+          (void)send_sync_event(SYNC_EVT_RANGE,
+                                spl_store_oldest_seq(), spl_store_next_seq(), 2);
           app_proceed();
           break;
         case SYNC_CMD_ACK:
@@ -219,6 +221,7 @@ static void handle_write(sl_bt_evt_gatt_server_user_write_request_t *req)
           break;
         case SYNC_CMD_STOP:
           sync_active = false;
+          sync_done_pending = false;
           break;
         default:
           att_err = 0xFF;
@@ -255,6 +258,7 @@ void spl_ble_on_event(sl_bt_msg_t *evt)
       status_notif_enabled = false;
       records_notif_enabled = false;
       sync_active = false;
+      sync_done_pending = false;
       break;
 
     case sl_bt_evt_gatt_server_characteristic_status_id: {
@@ -270,6 +274,7 @@ void spl_ble_on_event(sl_bt_msg_t *evt)
         records_notif_enabled = enabled;
         if (!enabled) {
           sync_active = false;
+          sync_done_pending = false;
         }
       }
       break;
@@ -292,7 +297,25 @@ void spl_ble_on_event(sl_bt_msg_t *evt)
 
 void spl_ble_process(void)
 {
-  if (!sync_active || active_connection == SL_BT_INVALID_CONNECTION_HANDLE) {
+  if (active_connection == SL_BT_INVALID_CONNECTION_HANDLE) {
+    return;
+  }
+
+  // DONE must actually reach the app: the indication send fails while the
+  // TX queue is still flushing the record burst, so retry until accepted.
+  if (sync_done_pending) {
+    if (send_sync_event(SYNC_EVT_DONE,
+                        spl_store_next_seq() ? spl_store_next_seq() - 1 : 0,
+                        0, 1) == SL_STATUS_OK) {
+      sync_done_pending = false;
+      sync_active = false;
+    } else {
+      app_proceed();   // try again on the next main-loop pass
+    }
+    return;
+  }
+
+  if (!sync_active) {
     return;
   }
 
@@ -334,9 +357,9 @@ void spl_ble_process(void)
     sync_next_seq += n;
   }
 
-  sync_active = false;
-  send_sync_event(SYNC_EVT_DONE,
-                  spl_store_next_seq() ? spl_store_next_seq() - 1 : 0, 0, 1);
+  // Backlog drained: deliver DONE (retried above if the queue is full).
+  sync_done_pending = true;
+  spl_ble_process();
 }
 
 void spl_ble_notify_new_record(void)

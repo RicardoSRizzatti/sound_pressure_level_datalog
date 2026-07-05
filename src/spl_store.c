@@ -63,11 +63,16 @@ bool spl_store_init(void)
   }
 
   // Recover ring state: scan stored records for min/max sequence numbers.
+  // With the ring full (2000 objects, cache of 256) this scan takes longer
+  // than the 2 s watchdog period — feed it while doing legitimate work.
   uint32_t min_seq = UINT32_MAX;
   uint32_t max_seq = 0;
   bool found = false;
   spl_record_t rec;
   for (uint32_t slot = 0; slot < SPL_STORE_MAX_RECORDS; slot++) {
+    if ((slot & 0x1F) == 0) {
+      app_watchdog_feed_now();
+    }
     if (read_record_at_slot(slot, &rec)) {
       found = true;
       if (rec.seq < min_seq) {
@@ -147,6 +152,9 @@ void spl_store_delete_through(uint32_t seq)
     seq = next_seq - 1;
   }
   for (uint32_t s = oldest_seq; s <= seq; s++) {
+    if (((s - oldest_seq) & 0x1F) == 0) {
+      app_watchdog_feed_now();   // deleting thousands of objects is slow
+    }
     (void)nvm3_deleteObject(nvm3_defaultHandle,
                             KEY_RECORD_BASE + (s % SPL_STORE_MAX_RECORDS));
   }

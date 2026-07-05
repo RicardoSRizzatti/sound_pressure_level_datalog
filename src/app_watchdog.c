@@ -16,20 +16,33 @@ static uint32_t audio_last_kick_tick;
 static bool storage_healthy = true;
 static bool ble_healthy = true;
 
+static void wdog_start(WDOG_PeriodSel_TypeDef period)
+{
+  WDOG_Init_TypeDef init = WDOG_INIT_DEFAULT;
+  init.perSel = period;
+  init.em2Run = true;
+  init.em3Run = true;
+  WDOGn_Enable(WDOG0, false);
+  WDOGn_Init(WDOG0, &init);
+}
+
 void app_watchdog_init(void)
 {
   reset_cause = RMU_ResetCauseGet();
   RMU_ResetCauseClear();
 
-  // ULFRCO (~1 kHz) clocks WDOG0; 2k cycles ~= 2 s timeout.
+  // ULFRCO (~1 kHz) clocks WDOG0.
   CMU_ClockSelectSet(cmuClock_WDOG0CLK, cmuSelect_ULFRCO);
   CMU_ClockEnable(cmuClock_WDOG0, true);
 
-  WDOG_Init_TypeDef init = WDOG_INIT_DEFAULT;
-  init.perSel = wdogPeriod_2k;
-  init.em2Run = true;
-  init.em3Run = true;
-  WDOGn_Init(WDOG0, &init);
+  // Boot mode: ~64 s. NVM3 recovery/repack at init can block for several
+  // seconds inside a single call — a 2 s period here causes a reset loop.
+  wdog_start(wdogPeriod_64k);
+}
+
+void app_watchdog_arm_normal(void)
+{
+  wdog_start(wdogPeriod_2k);   // ~2 s supervision during normal operation
 }
 
 uint32_t app_watchdog_reset_cause(void)
@@ -82,5 +95,10 @@ void app_watchdog_process(void)
     }
   }
 
+  WDOGn_Feed(WDOG0);
+}
+
+void app_watchdog_feed_now(void)
+{
   WDOGn_Feed(WDOG0);
 }

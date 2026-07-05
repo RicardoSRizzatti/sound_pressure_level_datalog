@@ -57,6 +57,9 @@ void app_init(void)
   }
 
   app_measurement_init();
+
+  // Init done: switch the watchdog from the long boot period to ~2 s.
+  app_watchdog_arm_normal();
 }
 
 // Application Process Action.
