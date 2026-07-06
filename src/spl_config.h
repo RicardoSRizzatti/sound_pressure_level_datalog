@@ -15,6 +15,7 @@
 #define SPL_METRIC_LAEQ      (1u << 0)
 #define SPL_METRIC_LAFMAX    (1u << 1)
 #define SPL_METRIC_SPECTRUM  (1u << 2)   ///< 1/3-octave LZeq per band
+#define SPL_METRIC_EXTENDED  (1u << 3)   ///< B&K 2245 set: min, Slow, Cpeak, LAE, percentis
 
 #define SPL_CONFIG_INTERVAL_MIN_S 5u
 #define SPL_CONFIG_INTERVAL_MAX_S 3600u

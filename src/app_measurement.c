@@ -80,6 +80,22 @@ void app_measurement_process(void)
       }
     }
 
+    if (result.extended) {
+      spl_extended_t ext = {
+        .lafmin_cdb = (int16_t)(result.lafmin_db * 100.0f),
+        .lasmax_cdb = (int16_t)(result.lasmax_db * 100.0f),
+        .lasmin_cdb = (int16_t)(result.lasmin_db * 100.0f),
+        .lcpeak_cdb = (int16_t)(result.lcpeak_db * 100.0f),
+        .lae_cdb = (int16_t)(result.lae_db * 100.0f),
+        .l10_cdb = (int16_t)(result.l10_db * 100.0f),
+        .l50_cdb = (int16_t)(result.l50_db * 100.0f),
+        .l90_cdb = (int16_t)(result.l90_db * 100.0f),
+      };
+      if (!spl_store_append_extended(seq, &ext)) {
+        app_log_error("NVM3 extended append failed" APP_LOG_NL);
+      }
+    }
+
     spl_ble_notify_new_record();
   } else {
     app_log_error("NVM3 append failed" APP_LOG_NL);

@@ -23,15 +23,30 @@
 /// SPL = 10*log10(mean_square) + 94 + 26 + 3.01 = 10*log10(ms) + 123.0
 #define SPL_DSP_DEFAULT_CAL_OFFSET_DB  123.0f
 
-/// Metrics of one closed measurement interval.
+/// Metrics of one closed measurement interval. The extended block follows
+/// the B&K 2245 parameter set (IEC 61672): Slow detector, minima, C-weighted
+/// peak, sound exposure level and LAF percentiles.
 typedef struct {
   float laeq_db;      ///< Equivalent continuous level, dB(A)
   float lafmax_db;    ///< Maximum Fast-weighted level, dB(A)
   uint32_t n_samples; ///< Samples integrated in the interval
+
+  bool extended;      ///< Extended metrics below are valid
+  float lafmin_db;    ///< Minimum Fast level, dB(A)
+  float lasmax_db;    ///< Maximum Slow (tau = 1 s) level, dB(A)
+  float lasmin_db;    ///< Minimum Slow level, dB(A)
+  float lcpeak_db;    ///< C-weighted peak level, dB(C)
+  float lae_db;       ///< Sound exposure level (LAeq + 10 log10 T), dB(A)
+  float l10_db;       ///< Level exceeded 10% of the time (LAF), dB(A)
+  float l50_db;       ///< Level exceeded 50% of the time, dB(A)
+  float l90_db;       ///< Level exceeded 90% of the time, dB(A)
 } spl_result_t;
 
 /// Reset all filter states and accumulators.
 void spl_dsp_init(void);
+
+/// Enable/disable the extended metric set (SPL_METRIC_EXTENDED config bit).
+void spl_dsp_set_extended(bool enabled);
 
 /// Set the dBFS -> dB SPL calibration offset (persisted elsewhere).
 void spl_dsp_set_cal_offset(float offset_db);

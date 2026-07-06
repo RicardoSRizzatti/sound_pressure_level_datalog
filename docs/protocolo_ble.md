@@ -24,7 +24,7 @@ bonding Just Works (definido na Fase 6).
 
 | Offset | Tipo | Campo |
 |---|---|---|
-| 0 | u8 | `metrics` bitmask: bit0 = LAeq, bit1 = LAFmax, bit2 = espectro 1/3 oitava |
+| 0 | u8 | `metrics` bitmask: bit0 = LAeq, bit1 = LAFmax, bit2 = espectro 1/3 oitava, bit3 = métricas estendidas (B&K 2245) |
 | 1 | u16 | `interval_s` (5–3600) |
 | 3 | i8 | reservado (0) |
 
@@ -114,6 +114,28 @@ Ordem das bandas (Hz): 20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200,
 espectro simplesmente não têm entrada (o app trata como ausente). O anel de
 espectros no dispositivo é menor que o de registros (~600 intervalos); o ACK
 apaga ambos.
+
+### Extended — `b8f0000a-...` (notify)
+
+Métricas estendidas (conjunto B&K 2245, IEC 61672) dos mesmos `seq`,
+enviadas **depois** dos Spectra e antes do DONE (quando inscrito). Cada
+notificação carrega `N = len/24` entradas:
+
+| Offset | Tipo | Campo |
+|---|---|---|
+| 0 | u32 | `boot_id` |
+| 4 | u32 | `seq` |
+| 8 | i16 | `lafmin_cdb` — LAFmin, dB(A) |
+| 10 | i16 | `lasmax_cdb` — LASmax (Slow), dB(A) |
+| 12 | i16 | `lasmin_cdb` — LASmin, dB(A) |
+| 14 | i16 | `lcpeak_cdb` — LCpeak, dB(C) |
+| 16 | i16 | `lae_cdb` — LAE (nível de exposição), dB(A) |
+| 18 | i16 | `l10_cdb` — L10 (percentil), dB(A) |
+| 20 | i16 | `l50_cdb` — L50, dB(A) |
+| 22 | i16 | `l90_cdb` — L90, dB(A) |
+
+Anel próprio no dispositivo (~1000 intervalos, lotes de 4); o ACK apaga
+junto com os registros e espectros.
 
 ## Fluxo de sincronização do app
 

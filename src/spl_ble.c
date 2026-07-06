@@ -32,12 +32,17 @@
 #define SPECTRUM_WIRE_SIZE (8u + 2u * SPL_STORE_SPEC_BANDS)
 #define MAX_SPECTRA_PER_NOTIFY 3u
 
+// Extended wire entry: boot_id u32 + seq u32 + 8 x i16 = 24 bytes.
+#define EXTENDED_WIRE_SIZE 24u
+#define MAX_EXTENDED_PER_NOTIFY 9u
+
 static uint8_t active_connection = SL_BT_INVALID_CONNECTION_HANDLE;
 static uint16_t att_mtu = 23;
 
 static bool status_notif_enabled;
 static bool records_notif_enabled;
 static bool spectra_notif_enabled;
+static bool extended_notif_enabled;
 
 // Sync session state. Records stream first, then (when the app subscribed
 // to Spectra) the spectra of the same range, then DONE.
@@ -47,6 +52,8 @@ static uint32_t sync_next_seq;   // next record to send
 static uint32_t sync_start_seq;  // first seq of this session
 static bool sync_spec_phase;     // records done, streaming spectra
 static uint32_t sync_spec_seq;   // next spectrum to send
+static bool sync_ext_phase;      // spectra done, streaming extended metrics
+static uint32_t sync_ext_seq;    // next extended entry to send
 
 static void pack_u16(uint8_t *p, uint16_t v)
 {
@@ -223,6 +230,7 @@ static void handle_write(sl_bt_evt_gatt_server_user_write_request_t *req)
           sync_done_pending = false;
           sync_start_seq = sync_next_seq;
           sync_spec_phase = false;
+          sync_ext_phase = false;
           (void)send_sync_event(SYNC_EVT_RANGE,
                                 spl_store_oldest_seq(), spl_store_next_seq(), 2);
           app_proceed();
@@ -273,6 +281,7 @@ void spl_ble_on_event(sl_bt_msg_t *evt)
       status_notif_enabled = false;
       records_notif_enabled = false;
       spectra_notif_enabled = false;
+      extended_notif_enabled = false;
       sync_active = false;
       sync_done_pending = false;
       break;
@@ -294,6 +303,8 @@ void spl_ble_on_event(sl_bt_msg_t *evt)
         }
       } else if (st->characteristic == gattdb_spl_spectra) {
         spectra_notif_enabled = enabled;
+      } else if (st->characteristic == gattdb_spl_extended) {
+        extended_notif_enabled = enabled;
       }
       break;
     }
@@ -421,6 +432,61 @@ void spl_ble_process(void)
         (uint16_t)(n * SPECTRUM_WIRE_SIZE), payload);
       if (sc != SL_STATUS_OK) {
         sync_spec_seq = bundle_start;   // rebuild this bundle on the next pass
+        app_proceed();
+        return;
+      }
+    }
+  }
+
+  // Spectra drained; stream the extended metrics of the same range.
+  if (extended_notif_enabled) {
+    if (!sync_ext_phase) {
+      sync_ext_phase = true;
+      sync_ext_seq = sync_start_seq;
+    }
+    while (sync_ext_seq < spl_store_next_seq()) {
+      uint8_t payload[MAX_EXTENDED_PER_NOTIFY * EXTENDED_WIRE_SIZE];
+      uint32_t max_by_mtu = (uint32_t)(att_mtu - 3) / EXTENDED_WIRE_SIZE;
+      if (max_by_mtu == 0) {
+        max_by_mtu = 1;
+      }
+      if (max_by_mtu > MAX_EXTENDED_PER_NOTIFY) {
+        max_by_mtu = MAX_EXTENDED_PER_NOTIFY;
+      }
+
+      uint32_t bundle_start = sync_ext_seq;
+      uint32_t n = 0;
+      spl_extended_t ex;
+      while (n < max_by_mtu && sync_ext_seq < spl_store_next_seq()) {
+        if (spl_store_read_extended(sync_ext_seq, &ex)) {
+          uint8_t *p = payload + n * EXTENDED_WIRE_SIZE;
+          pack_u32(p, ex.boot_id);
+          pack_u32(p + 4, ex.seq);
+          pack_u16(p + 8, (uint16_t)ex.lafmin_cdb);
+          pack_u16(p + 10, (uint16_t)ex.lasmax_cdb);
+          pack_u16(p + 12, (uint16_t)ex.lasmin_cdb);
+          pack_u16(p + 14, (uint16_t)ex.lcpeak_cdb);
+          pack_u16(p + 16, (uint16_t)ex.lae_cdb);
+          pack_u16(p + 18, (uint16_t)ex.l10_cdb);
+          pack_u16(p + 20, (uint16_t)ex.l50_cdb);
+          pack_u16(p + 22, (uint16_t)ex.l90_cdb);
+          n++;
+          sync_ext_seq++;
+        } else if (n == 0) {
+          sync_ext_seq++;   // gap: keep scanning
+        } else {
+          break;
+        }
+      }
+      if (n == 0) {
+        continue;
+      }
+
+      sl_status_t sc = sl_bt_gatt_server_send_notification(
+        active_connection, gattdb_spl_extended,
+        (uint16_t)(n * EXTENDED_WIRE_SIZE), payload);
+      if (sc != SL_STATUS_OK) {
+        sync_ext_seq = bundle_start;
         app_proceed();
         return;
       }

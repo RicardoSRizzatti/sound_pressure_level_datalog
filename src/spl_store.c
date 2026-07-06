@@ -28,11 +28,17 @@
 #define KEY_BOOT_EPOCHS    0x0004u
 #define KEY_RECORD_BASE    0x1000u
 #define KEY_SPEC_BASE      0x2000u
+#define KEY_EXT_BASE       0x3000u
 
 #define BATCH              SPL_STORE_BATCH
 #define MAX_BATCHES        (SPL_STORE_MAX_RECORDS / SPL_STORE_BATCH)
 #define SPEC_BATCH         SPL_STORE_SPEC_BATCH
 #define MAX_SPEC_BATCHES   (SPL_STORE_MAX_SPECTRA / SPL_STORE_SPEC_BATCH)
+#define EXT_BATCH          SPL_STORE_EXT_BATCH
+#define MAX_EXT_BATCHES    (SPL_STORE_MAX_EXTENDED / SPL_STORE_EXT_BATCH)
+
+// Largest companion-ring object in bytes (spectrum: 68 B x 3).
+#define COMPANION_MAX_OBJ  (sizeof(spl_spectrum_t) * SPL_STORE_SPEC_BATCH)
 
 static uint32_t boot_id;
 static uint32_t wdog_reset_count;
@@ -48,14 +54,33 @@ static spl_record_t read_cache[BATCH];
 static uint32_t read_cache_batch = UINT32_MAX;
 static uint32_t read_cache_count;
 
-// Spectrum companion ring state (implementation further down). Entries are
-// self-describing by seq; a batch may be sparse when the spectrum metric
-// toggles between intervals.
-static spl_spectrum_t cur_spec[SPEC_BATCH];
-static uint32_t cur_spec_count;
-static uint32_t cur_spec_batch = UINT32_MAX;
-static nvm3_ObjectKey_t spec_key(uint32_t spec_batch);
-static void spec_delete_through(uint32_t seq);
+// Generic companion ring: parallel to the record ring, keyed by seq, with
+// fixed-size entries whose first 8 bytes are {boot_id u32, seq u32}. Used
+// for both the 1/3-octave spectra and the extended B&K metrics. Each ring
+// keeps the currently-filled batch in RAM (rewritten on every append).
+typedef struct {
+  nvm3_ObjectKey_t key_base;
+  uint32_t max_batches;
+  uint32_t batch;          // records per NVM3 object
+  size_t entry_size;
+  uint8_t cur[COMPANION_MAX_OBJ];
+  uint32_t cur_count;
+  uint32_t cur_batch;      // batch index of cur[], UINT32_MAX when empty
+} companion_ring_t;
+
+static companion_ring_t spec_ring = {
+  .key_base = KEY_SPEC_BASE, .max_batches = MAX_SPEC_BATCHES,
+  .batch = SPEC_BATCH, .entry_size = sizeof(spl_spectrum_t),
+  .cur_batch = UINT32_MAX,
+};
+static companion_ring_t ext_ring = {
+  .key_base = KEY_EXT_BASE, .max_batches = MAX_EXT_BATCHES,
+  .batch = EXT_BATCH, .entry_size = sizeof(spl_extended_t),
+  .cur_batch = UINT32_MAX,
+};
+
+static void companion_delete_through(companion_ring_t *r, uint32_t seq);
+static nvm3_ObjectKey_t companion_key(const companion_ring_t *r, uint32_t batch);
 
 static nvm3_ObjectKey_t batch_key(uint32_t batch)
 {
@@ -238,7 +263,8 @@ void spl_store_delete_through(uint32_t seq)
     }
   }
 
-  spec_delete_through(seq);
+  companion_delete_through(&spec_ring, seq);
+  companion_delete_through(&ext_ring, seq);
 
   oldest_seq = seq + 1;
   empty = (oldest_seq == next_seq);
@@ -250,9 +276,11 @@ void spl_store_clear(void)
     spl_store_delete_through(next_seq - 1);
     // Also drop the partial batch objects, if any.
     (void)nvm3_deleteObject(nvm3_defaultHandle, batch_key(next_seq / BATCH));
-    (void)nvm3_deleteObject(nvm3_defaultHandle, spec_key(next_seq / SPEC_BATCH));
+    (void)nvm3_deleteObject(nvm3_defaultHandle, companion_key(&spec_ring, next_seq / SPEC_BATCH));
+    (void)nvm3_deleteObject(nvm3_defaultHandle, companion_key(&ext_ring, next_seq / EXT_BATCH));
     read_cache_batch = UINT32_MAX;
-    cur_spec_batch = UINT32_MAX;
+    spec_ring.cur_batch = UINT32_MAX;
+    ext_ring.cur_batch = UINT32_MAX;
     oldest_seq = next_seq;
     empty = true;
   }
@@ -275,95 +303,134 @@ uint32_t spl_store_watchdog_reset_count(void)
   return wdog_reset_count;
 }
 
-// ---- Spectrum companion ring -------------------------------------------------
+// ---- Generic companion ring --------------------------------------------------
 
-static nvm3_ObjectKey_t spec_key(uint32_t spec_batch)
+// Byte offset of the seq field inside every companion entry ({boot_id, seq}).
+#define COMPANION_SEQ_OFFSET 4u
+
+static nvm3_ObjectKey_t companion_key(const companion_ring_t *r, uint32_t batch)
 {
-  return KEY_SPEC_BASE + (spec_batch % MAX_SPEC_BATCHES);
+  return r->key_base + (batch % r->max_batches);
 }
 
-/// Read the spectrum object at @p key into @p out (up to SPEC_BATCH entries).
-static uint32_t read_spec_object(nvm3_ObjectKey_t key, spl_spectrum_t *out)
+static uint32_t entry_seq(const uint8_t *entry)
+{
+  uint32_t seq;
+  memcpy(&seq, entry + COMPANION_SEQ_OFFSET, sizeof(seq));
+  return seq;
+}
+
+/// Read a companion object into @p out; returns the entry count (0 if none).
+static uint32_t companion_read_object(const companion_ring_t *r,
+                                      nvm3_ObjectKey_t key, uint8_t *out)
 {
   uint32_t type;
   size_t len;
   if (nvm3_getObjectInfo(nvm3_defaultHandle, key, &type, &len) != SL_STATUS_OK
       || type != NVM3_OBJECTTYPE_DATA
-      || len == 0 || len > sizeof(spl_spectrum_t) * SPEC_BATCH
-      || (len % sizeof(spl_spectrum_t)) != 0) {
+      || len == 0 || len > r->entry_size * r->batch
+      || (len % r->entry_size) != 0) {
     return 0;
   }
   if (nvm3_readData(nvm3_defaultHandle, key, out, len) != SL_STATUS_OK) {
     return 0;
   }
-  return (uint32_t)(len / sizeof(spl_spectrum_t));
+  return (uint32_t)(len / r->entry_size);
 }
 
-bool spl_store_append_spectrum(uint32_t seq, const int16_t bands_cdb[SPL_STORE_SPEC_BANDS])
+/// Append @p entry (whose seq field must equal @p seq) to ring @p r.
+static bool companion_append(companion_ring_t *r, uint32_t seq, const void *entry)
 {
-  uint32_t batch = seq / SPEC_BATCH;
+  uint32_t batch = seq / r->batch;
 
-  if (cur_spec_batch != batch) {
+  if (r->cur_batch != batch) {
     // Entering a new batch slot: keep entries already stored for THIS batch
     // (reboot recovery); anything older in the slot gets overwritten.
-    uint32_t n = read_spec_object(spec_key(batch), cur_spec);
-    cur_spec_count = 0;
+    uint8_t tmp[COMPANION_MAX_OBJ];
+    uint32_t n = companion_read_object(r, companion_key(r, batch), tmp);
+    r->cur_count = 0;
     for (uint32_t i = 0; i < n; i++) {
-      if (cur_spec[i].seq / SPEC_BATCH == batch && cur_spec[i].seq < seq) {
-        cur_spec[cur_spec_count++] = cur_spec[i];
+      const uint8_t *e = tmp + i * r->entry_size;
+      uint32_t s = entry_seq(e);
+      if (s / r->batch == batch && s < seq) {
+        memcpy(r->cur + r->cur_count * r->entry_size, e, r->entry_size);
+        r->cur_count++;
       }
     }
-    cur_spec_batch = batch;
+    r->cur_batch = batch;
   }
 
-  if (cur_spec_count >= SPEC_BATCH) {
-    return false;   // should not happen (3 seqs per batch)
+  if (r->cur_count >= r->batch) {
+    return false;   // should not happen (batch seqs per object)
   }
-  cur_spec[cur_spec_count].boot_id = boot_id;
-  cur_spec[cur_spec_count].seq = seq;
-  memcpy(cur_spec[cur_spec_count].bands_cdb, bands_cdb,
-         sizeof(cur_spec[0].bands_cdb));
-  cur_spec_count++;
+  memcpy(r->cur + r->cur_count * r->entry_size, entry, r->entry_size);
+  r->cur_count++;
 
-  return nvm3_writeData(nvm3_defaultHandle, spec_key(batch),
-                        cur_spec, cur_spec_count * sizeof(spl_spectrum_t))
-         == SL_STATUS_OK;
+  return nvm3_writeData(nvm3_defaultHandle, companion_key(r, batch),
+                        r->cur, r->cur_count * r->entry_size) == SL_STATUS_OK;
 }
 
-bool spl_store_read_spectrum(uint32_t seq, spl_spectrum_t *out)
+/// Copy the entry for @p seq into @p out. False if not stored (or overwritten).
+static bool companion_read(companion_ring_t *r, uint32_t seq, void *out)
 {
-  spl_spectrum_t buf[SPEC_BATCH];
-  uint32_t n = read_spec_object(spec_key(seq / SPEC_BATCH), buf);
+  uint8_t buf[COMPANION_MAX_OBJ];
+  uint32_t n = companion_read_object(r, companion_key(r, seq / r->batch), buf);
   for (uint32_t i = 0; i < n; i++) {
-    if (buf[i].seq == seq) {
-      *out = buf[i];
+    const uint8_t *e = buf + i * r->entry_size;
+    if (entry_seq(e) == seq) {
+      memcpy(out, e, r->entry_size);
       return true;
     }
   }
   return false;
 }
 
-/// Delete spectrum batches fully covered by an ACK up to @p seq.
-static void spec_delete_through(uint32_t seq)
+/// Delete companion batches fully covered by an ACK up to @p seq.
+static void companion_delete_through(companion_ring_t *r, uint32_t seq)
 {
-  // Walk the batch indices whose last seq (b*SPEC_BATCH + SPEC_BATCH - 1)
-  // is covered by the ACK, bounded by the ring span.
-  uint32_t last_batch = seq / SPEC_BATCH;
-  uint32_t first_batch = (last_batch >= MAX_SPEC_BATCHES)
-                         ? last_batch - MAX_SPEC_BATCHES + 1 : 0;
+  uint32_t last_batch = seq / r->batch;
+  uint32_t first_batch = (last_batch >= r->max_batches)
+                         ? last_batch - r->max_batches + 1 : 0;
   uint32_t done = 0;
   for (uint32_t b = first_batch; b <= last_batch; b++) {
-    if ((b * SPEC_BATCH + SPEC_BATCH - 1) > seq) {
+    if ((b * r->batch + r->batch - 1) > seq) {
       break;   // partially covered batch stays (app dedups on re-sync)
     }
     if (((done++) & 0x1F) == 0) {
       app_watchdog_feed_now();
     }
-    (void)nvm3_deleteObject(nvm3_defaultHandle, spec_key(b));
-    if (cur_spec_batch == b) {
-      cur_spec_batch = UINT32_MAX;
+    (void)nvm3_deleteObject(nvm3_defaultHandle, companion_key(r, b));
+    if (r->cur_batch == b) {
+      r->cur_batch = UINT32_MAX;
     }
   }
+}
+
+// ---- Spectrum & extended companion rings (thin wrappers) ---------------------
+
+bool spl_store_append_spectrum(uint32_t seq, const int16_t bands_cdb[SPL_STORE_SPEC_BANDS])
+{
+  spl_spectrum_t e = { .boot_id = boot_id, .seq = seq };
+  memcpy(e.bands_cdb, bands_cdb, sizeof(e.bands_cdb));
+  return companion_append(&spec_ring, seq, &e);
+}
+
+bool spl_store_read_spectrum(uint32_t seq, spl_spectrum_t *out)
+{
+  return companion_read(&spec_ring, seq, out);
+}
+
+bool spl_store_append_extended(uint32_t seq, const spl_extended_t *ext)
+{
+  spl_extended_t e = *ext;
+  e.boot_id = boot_id;
+  e.seq = seq;
+  return companion_append(&ext_ring, seq, &e);
+}
+
+bool spl_store_read_extended(uint32_t seq, spl_extended_t *out)
+{
+  return companion_read(&ext_ring, seq, out);
 }
 
 static uint32_t load_boot_epochs(spl_boot_epoch_t table[SPL_STORE_MAX_BOOT_EPOCHS])
