@@ -4,6 +4,7 @@
  ******************************************************************************/
 #include "spl_config.h"
 
+#include "app_led.h"
 #include "nvm3_default.h"
 #include "spl_dsp.h"
 #include "spl_toct.h"
@@ -24,15 +25,18 @@ static spl_config_t config;
 static void apply(void)
 {
   spl_dsp_set_cal_offset((float)config.cal_offset_cdb / 100.0f);
+  spl_dsp_set_extended((config.metrics & SPL_METRIC_EXTENDED) != 0);
   spl_toct_set_enabled((config.metrics & SPL_METRIC_SPECTRUM) != 0);
 }
+
+#define SPL_METRIC_ALL \
+  (SPL_METRIC_LAEQ | SPL_METRIC_LAFMAX | SPL_METRIC_SPECTRUM | SPL_METRIC_EXTENDED)
 
 static bool valid(const spl_config_t *cfg)
 {
   return cfg->version == CONFIG_VERSION
          && cfg->metrics != 0
-         && (cfg->metrics
-             & ~(SPL_METRIC_LAEQ | SPL_METRIC_LAFMAX | SPL_METRIC_SPECTRUM)) == 0
+         && (cfg->metrics & ~SPL_METRIC_ALL) == 0
          && cfg->interval_s >= SPL_CONFIG_INTERVAL_MIN_S
          && cfg->interval_s <= SPL_CONFIG_INTERVAL_MAX_S;
 }
@@ -65,6 +69,9 @@ bool spl_config_set(const spl_config_t *cfg)
   }
   config = *cfg;
   apply();
-  return nvm3_writeData(nvm3_defaultHandle, KEY_CONFIG,
-                        &config, sizeof(config)) == SL_STATUS_OK;
+  bool ok = nvm3_writeData(nvm3_defaultHandle, KEY_CONFIG,
+                           &config, sizeof(config)) == SL_STATUS_OK;
+  // Visual acknowledgement that a configuration was received and applied.
+  app_led_blink_config_ack();
+  return ok;
 }

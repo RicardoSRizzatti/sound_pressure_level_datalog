@@ -58,6 +58,30 @@ void spl_store_maintain(void);
 uint32_t spl_store_boot_id(void);
 uint32_t spl_store_watchdog_reset_count(void);
 
+/// Extended-metric companion ring (B&K 2245 set), aligned to record seq.
+/// 24-byte entries: 8 metrics in centi-dB after the 8-byte {boot_id, seq}.
+#define SPL_STORE_MAX_EXTENDED 1000u
+#define SPL_STORE_EXT_BATCH    4u
+
+typedef struct __attribute__((packed)) {
+  uint32_t boot_id;
+  uint32_t seq;
+  int16_t lafmin_cdb;
+  int16_t lasmax_cdb;
+  int16_t lasmin_cdb;
+  int16_t lcpeak_cdb;
+  int16_t lae_cdb;
+  int16_t l10_cdb;
+  int16_t l50_cdb;
+  int16_t l90_cdb;
+} spl_extended_t;
+
+/// Append the extended metrics of the record with sequence number @p seq.
+bool spl_store_append_extended(uint32_t seq, const spl_extended_t *ext);
+
+/// Read the extended metrics for @p seq. False if not stored (or overwritten).
+bool spl_store_read_extended(uint32_t seq, spl_extended_t *out);
+
 /// 1/3-octave spectrum companion ring (aligned to record seq numbers).
 /// 68-byte entries, 3 per NVM3 object; smaller than the base ring — spectra
 /// are heavier, so they cover the most recent ~600 intervals only.

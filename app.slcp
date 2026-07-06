@@ -33,6 +33,8 @@ component:
   - id: emlib_rmu
   - id: mic_pdm_driver
   - id: cmsis_dsp
+  - id: simple_led
+    instance: [led0]
   - id: iostream_usart
     instance: [vcom]
   - id: iostream_retarget_stdio
@@ -50,6 +52,7 @@ source:
   - path: src/app_watchdog.c
   - path: src/app_measurement.c
   - path: src/mic_pdm.c
+  - path: src/app_led.c
 
 include:
   - path: src
@@ -61,6 +64,7 @@ include:
       - path: spl_cli.h
       - path: spl_ble.h
       - path: spl_toct.h
+      - path: app_led.h
       - path: spl_toct_coeffs.h
       - path: app_watchdog.h
       - path: app_measurement.h

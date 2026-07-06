@@ -107,6 +107,30 @@ static void cmd_metrics(sl_cli_command_arg_t *arguments)
   }
 }
 
+static void cmd_ext(sl_cli_command_arg_t *arguments)
+{
+  (void)arguments;
+  if (!(spl_config_get()->metrics & SPL_METRIC_EXTENDED)) {
+    printf("metricas estendidas desabilitadas (metrics bit 0x08)\r\n");
+    return;
+  }
+  uint32_t seq = spl_store_next_seq();
+  spl_extended_t e;
+  if (seq == 0 || !spl_store_read_extended(seq - 1, &e)) {
+    printf("nenhum registro estendido ainda\r\n");
+    return;
+  }
+  printf("seq %lu\r\n", (unsigned long)(seq - 1));
+  printf("LAFmin: %d.%02d\r\n", e.lafmin_cdb / 100, abs(e.lafmin_cdb % 100));
+  printf("LASmax: %d.%02d\r\n", e.lasmax_cdb / 100, abs(e.lasmax_cdb % 100));
+  printf("LASmin: %d.%02d\r\n", e.lasmin_cdb / 100, abs(e.lasmin_cdb % 100));
+  printf("LCpeak: %d.%02d\r\n", e.lcpeak_cdb / 100, abs(e.lcpeak_cdb % 100));
+  printf("LAE: %d.%02d\r\n", e.lae_cdb / 100, abs(e.lae_cdb % 100));
+  printf("L10: %d.%02d\r\n", e.l10_cdb / 100, abs(e.l10_cdb % 100));
+  printf("L50: %d.%02d\r\n", e.l50_cdb / 100, abs(e.l50_cdb % 100));
+  printf("L90: %d.%02d\r\n", e.l90_cdb / 100, abs(e.l90_cdb % 100));
+}
+
 static void cmd_spec(sl_cli_command_arg_t *arguments)
 {
   (void)arguments;
@@ -171,6 +195,9 @@ static const sl_cli_command_info_t cmd_info_interval =
 static const sl_cli_command_info_t cmd_info_metrics =
   SL_CLI_COMMAND(cmd_metrics, "Set metric bitmask", "1=LAeq 2=LAFmax 4=espectro",
                  { SL_CLI_ARG_UINT32, SL_CLI_ARG_END, });
+static const sl_cli_command_info_t cmd_info_ext =
+  SL_CLI_COMMAND(cmd_ext, "Show last interval extended metrics", "",
+                 { SL_CLI_ARG_END, });
 static const sl_cli_command_info_t cmd_info_spec =
   SL_CLI_COMMAND(cmd_spec, "Show last interval 1/3-octave spectrum", "",
                  { SL_CLI_ARG_END, });
@@ -189,6 +216,7 @@ static sl_cli_command_entry_t command_table[] = {
   { "cal", &cmd_info_cal, false },
   { "interval", &cmd_info_interval, false },
   { "metrics", &cmd_info_metrics, false },
+  { "ext", &cmd_info_ext, false },
   { "spec", &cmd_info_spec, false },
   { "testtone", &cmd_info_testtone, false },
   { "hang", &cmd_info_hang, false },
