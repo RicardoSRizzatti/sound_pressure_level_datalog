@@ -15,6 +15,18 @@ Estado do projeto, decisões técnicas e resultados de validação.
 | 5 | Datalog NVM3 + config persistida + CLI | ✅ validado na placa |
 | 6 | Serviço BLE GATT customizado | ✅ validado ponta a ponta com o app (sync 198+31 registros, ACK, config, time sync) |
 | 7 | Power manager + operação em bateria | ⏳ pendente |
+| 8 | Espectro 1/3 de oitava (30 bandas, 20 Hz–16 kHz) | ✅ validado (1 kHz → 93,99 dB, 0 overruns) |
+
+**Espectro (fase 8):** fs subiu para **48 kHz exato** (o prescaler inteiro do
+PDM sobre 38,4 MHz fazia os "32 kHz" rodarem a 33,3 kHz reais); banco
+multitaxa IEC 61260 (Butterworth ordem 6 por banda, 5 estágios ÷4,
+anti-alias ordem 10, projeto/validação em `tools/design_third_octave.py`);
+SYSCLK a 76,8 MHz **via DPLL travado no HFXO** (38,4 MHz não comporta o
+banco; HFRCO livre impede o boot da stack BLE); LZeq por banda gravado num
+anel NVM3 paralelo e sincronizado pela característica Spectra
+(protocolo_ble.md). Lição de build: `slc generate` preserva config files já
+existentes — use `./build.ps1 -Clean -Generate` para aplicar mudanças de
+`configuration:` do slcp.
 
 Bugs achados na validação com hardware (corrigidos): loop de watchdog com
 anel NVM3 cheio (→ watchdog em 2 estágios + **lotes de 10 registros por
