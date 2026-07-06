@@ -141,6 +141,33 @@ Os espectros vão para um anel NVM3 próprio, alinhado por `seq` aos
 registros, e são sincronizados pela característica **Spectra** depois dos
 Records (ver [protocolo_ble.md](protocolo_ble.md)).
 
+## 8b. Métricas estendidas (conjunto B&K 2245)
+
+Com a métrica `0x08` ligada, o firmware calcula por intervalo, além de
+LAeq/LAFmax, o conjunto de um sonômetro classe 1 (referência: B&K 2245,
+IEC 61672):
+
+- **LAFmin / LASmax / LASmin**: mínimo Fast e extremos com o detector
+  **Slow** (τ = 1 s), que roda em paralelo ao Fast;
+- **LCpeak**: pico com **ponderação C** (2 biquads classe 2, projeto em
+  `tools/design_c_weighting.py`) e detecção de pico verdadeiro (sem
+  suavização) — captura impactos;
+- **LAE** (nível de exposição sonora): `LAeq + 10·log10(T)`, normaliza a
+  energia do intervalo para 1 s;
+- **L10 / L50 / L90** (percentis estatísticos): nível excedido em 10%, 50%
+  e 90% do tempo, calculados de um **histograma** do nível Fast (bins de
+  0,5 dB) amostrado a cada bloco.
+
+Vão para um anel NVM3 próprio (24 B/entrada), sincronizados pela
+característica **Extended** depois dos Spectra.
+
+## 8c. Feedback ao usuário
+
+Toda vez que uma configuração é aceita (via BLE ou CLI), o LED0 da placa
+**pisca 3 vezes** (não bloqueante, via sleeptimer) — confirmação visual
+imediata de que a placa recebeu e aplicou os novos parâmetros. O app também
+mostra um aviso na tela.
+
 ## 9. Energia — operação em bateria
 
 Na CR2032, o consumo dominante é o conjunto mic + PDM + DSP contínuos e o
