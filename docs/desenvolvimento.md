@@ -10,7 +10,7 @@ Estado do projeto, decisões técnicas e resultados de validação.
 | 0 | Ambiente (CMake/Ninja/ARM GCC/slc-cli/SDK/Commander) | ✅ completo |
 | 1 | Esqueleto compilável + flash + BLE advertising | ✅ validado na placa |
 | 2 | Watchdog WDOG0 + causa de reset + `hang` | ✅ validado na placa |
-| 3 | Aquisição PDM estéreo 32 kHz (LDMA + FIFO) | ✅ validado com mics reais |
+| 3 | Aquisição PDM mono 48 kHz (LDMA + FIFO) | ✅ validado com mics reais |
 | 4 | DSP: ponderação A + Fast + LAeq/LAFmax (CMSIS-DSP) | ✅ validado (±0,02 dB) |
 | 5 | Datalog NVM3 + config persistida + CLI | ✅ validado na placa |
 | 6 | Serviço BLE GATT customizado | ✅ validado ponta a ponta com o app (sync 198+31 registros, ACK, config, time sync) |
@@ -35,27 +35,34 @@ fora da janela pós mass-erase (→ clamp). Detalhes nos commits.
 
 ## Decisões técnicas (e porquês)
 
-- **fs = 32 kHz** (não 16 kHz): a 16 kHz o filtro de ponderação A sai da
-  tolerância classe 2 da IEC 61672 em 6,3 kHz por *warping* da transformação
-  bilinear; a 32 kHz fica dentro em toda a faixa verificada
-  (`tools/design_a_weighting.py`).
+- **fs = 48 kHz EXATO** (DSR 50, clock dos mics 2,4 MHz): o prescaler do PDM
+  é inteiro sobre o clock de 38,4 MHz — a combinação antiga "32 kHz + DSR 64"
+  rodava na verdade a 33,3 kHz (4,2% de erro, inaceitável para espectro).
+  48 kHz × 50 divide 38,4 MHz sem resto. A 16 kHz o filtro A sairia da
+  classe 2 da IEC 61672 por *warping* (`tools/design_a_weighting.py`).
 - **CMSIS-DSP**: o Cortex-M33 tem extensão DSP/FPU; o pipeline usa
   `arm_q15_to_float` → `arm_biquad_cascade_df2T_f32` (3 seções) →
   `arm_power_f32`. Atenção à convenção do CMSIS: coeficientes do denominador
   entram **negados** (−a1, −a2).
 - **PDM DSR = 64** → clock PDM = 2,048 MHz, centro da faixa standard dos mics
   (o default 32 dava 1,024 MHz, borda inferior da faixa).
-- **Captura estéreo, SPL no canal 0**: os dois mics são adquiridos
-  (diagnóstico por canal no `status`); o DSP usa o esquerdo.
-- **FIFO de 4 blocos** entre ISR e loop principal: tolera ~40 ms de latência
-  (prints de CLI, escrita NVM3) sem perder áudio. Não aumentar sem medir RAM:
-  fila de 8 blocos estéreo estourou o heap da stack BLE
-  (`sl_bt_advertiser_create_set` → 0x1007 → assert → loop de watchdog).
-- **NVM3 de 128 KB** (16 páginas de 8 KB): anel de 2000 registros de 16 bytes
-  com folga para wear-leveling. O default de 40 KB não comporta.
-- **Watchdog com health-flags**: WDOG0 (~2 s) é alimentado no loop principal
-  apenas se o áudio está fresco (<500 ms), a última escrita NVM3 teve sucesso
-  e a stack BLE está saudável.
+- **Captura mono (mic esquerdo)**: foi estéreo durante o diagnóstico da
+  pinagem; voltou a mono para devolver ~4,5 KB de RAM ao heap da stack BLE.
+  RAM é o recurso crítico: estouros do heap causam 0x1007 no advertiser ou
+  a stack nem inicializar (sem log!).
+- **FIFO de 4 blocos com drenagem LIMITADA** entre ISR e loop principal:
+  tolera ~32 ms de latência; a drenagem tem teto por passada para que
+  sobrecarga de CPU vire contador de overruns, e não loop de watchdog.
+- **NVM3 de 128 KB** (16 páginas de 8 KB): registros em **lotes de 10 por
+  objeto** (o anel cheio com objetos individuais tornava boot scan/repack
+  mais lentos que o watchdog) + anel paralelo de ~600 espectros (lotes de 3);
+  repack amortizado via `nvm3_repack()` no loop principal.
+- **Watchdog em dois estágios com health-flags**: ~64 s no boot (recuperação
+  NVM3 pode bloquear segundos numa única chamada), ~8 s em operação;
+  alimentado apenas se o áudio está fresco (<500 ms), a última escrita NVM3
+  teve sucesso e a stack BLE está saudável.
+- **SYSCLK 76,8 MHz via DPLL travado no HFXO**: 38,4 MHz não comporta o
+  banco de filtros; HFRCO livre como SYSCLK impede o boot da stack BLE.
 - **Sem RTC de bateria**: registros carimbam `(boot_id, uptime_s)`; o app faz
   *time sync* e o firmware persiste `epoch_boot` por boot (anel de 8 em NVM3).
 
@@ -82,7 +89,7 @@ reflete a revisão real do PCB — confie na serigrafia.
 
 - **Som ambiente** (sala silenciosa): LAeq ≈ 43–45 dB(A), LAFmax ≈ 45–48 dB(A),
   0 overruns de áudio, ~92 blocos/s.
-- **Watchdog**: `hang` → reset em ~2 s, `RSTCAUSE` identificado, contador
+- **Watchdog**: `hang` → reset em ~8 s, `RSTCAUSE` identificado, contador
   persistido, registros e configuração intactos.
 - **BLE**: advertising como "SPL Logger"; conexão e leitura de características
   validadas com nRF Connect (protocolo em [protocolo_ble.md](protocolo_ble.md)).

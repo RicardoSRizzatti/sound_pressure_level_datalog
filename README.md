@@ -3,10 +3,12 @@
 Firmware de datalogger de nível de pressão sonora (NPS/SPL) para a
 **Thunderboard EFR32BG22 (SLTB010A, placa BRD4184A rev. A02)**.
 
-O dispositivo amostra os microfones PDM da placa, calcula métricas em dB(A)
-com ponderação temporal **Fast** (τ = 125 ms) — **LAeq** e **LAFmax** por
-intervalo (padrão 20 s, configurável) — grava os registros em flash interna
-(NVM3) e os expõe por um serviço BLE customizado para o aplicativo
+O dispositivo amostra os microfones PDM da placa a 48 kHz, calcula métricas
+em dB(A) com ponderação temporal **Fast** (τ = 125 ms) — **LAeq** e
+**LAFmax** por intervalo (padrão 20 s, configurável) — e, opcionalmente, o
+**espectro de 1/3 de oitava** (30 bandas, 20 Hz–16 kHz, LZeq). Tudo é
+gravado em flash interna (NVM3) e exposto por um serviço BLE customizado
+para o aplicativo
 [spl_datalog_app](../spl_datalog_app). Um watchdog (WDOG0) reinicia o
 firmware em caso de travamento, preservando os dados já gravados.
 
